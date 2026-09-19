@@ -1,4 +1,4 @@
-import type { InvoiceDocument } from "./extraction";
+import type { InvoiceDocument, TrustedSupplierRepository } from "./ports";
 import type { InvoicePaymentDetails, TrustedSupplier } from "./verification";
 
 export const DEMO_OWNER_ID = "demo-owner";
@@ -90,3 +90,11 @@ export const demoInvoiceDocuments: InvoiceDocument[] = demoVerificationScenarios
 export const demoExtractionFixtures = new Map(
   demoVerificationScenarios.map((scenario) => [scenario.id, scenario.invoice]),
 );
+
+export class InMemoryTrustedSupplierRepository implements TrustedSupplierRepository {
+  constructor(private readonly suppliers: readonly TrustedSupplier[]) {}
+
+  async listByOwner(ownerId: string): Promise<TrustedSupplier[]> {
+    return this.suppliers.filter((supplier) => supplier.ownerId === ownerId).map((supplier) => ({ ...supplier }));
+  }
+}

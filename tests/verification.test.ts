@@ -6,12 +6,14 @@ import {
   demoTrustedSuppliers,
   DEMO_OWNER_ID,
   demoVerificationScenarios,
+  InMemoryTrustedSupplierRepository,
 } from "../domain/demo-data";
 import { MockInvoiceExtractionAdapter, processInvoiceDocument } from "../domain/extraction";
 import {
   normalizeSupplierName,
   validateInvoicePaymentDetails,
   verifyInvoicePayment,
+  verifyInvoicePaymentFromRepository,
   type InvoicePaymentDetails,
 } from "../domain/verification";
 
@@ -80,6 +82,19 @@ test("different bank accounts never false-match", () => {
 test("supplier registry is owner-scoped", () => {
   const result = verifyInvoicePayment(scenario("matching-details"), demoTrustedSuppliers, "another-owner");
   assert.equal(result.status, "REVIEW_REQUIRED");
+});
+
+test("repository adapter supplies owner-scoped records to the engine", async () => {
+  const repository = new InMemoryTrustedSupplierRepository(demoTrustedSuppliers);
+  const result = await verifyInvoicePaymentFromRepository(scenario("matching-details"), repository, DEMO_OWNER_ID);
+  assert.equal(result.status, "LOW_RISK");
+});
+
+test("duplicate trusted supplier records require review instead of low risk", () => {
+  const duplicate = { ...demoTrustedSuppliers[0], id: "demo-supplier-abc-duplicate" };
+  const result = verifyInvoicePayment(scenario("matching-details"), [...demoTrustedSuppliers, duplicate], DEMO_OWNER_ID);
+  assert.equal(result.status, "REVIEW_REQUIRED");
+  assert.equal(result.title, "Duplicate trusted records");
 });
 
 test("mock invoice pipeline produces all three demo outcomes", async () => {

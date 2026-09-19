@@ -33,13 +33,7 @@ export interface VerificationResult {
   checkedAt: string;
 }
 
-export interface TrustedSupplierRepository {
-  listByOwner(ownerId: string): Promise<TrustedSupplier[]>;
-}
-
-export interface InvoiceExtractionAdapter {
-  extract(fileKey: string): Promise<InvoicePaymentDetails>;
-}
+import type { TrustedSupplierRepository } from "./ports";
 
 export interface PaymentValidationIssue {
   field: keyof InvoicePaymentDetails;
@@ -100,7 +94,7 @@ export function verifyInvoicePayment(
   const checkedAt = new Date().toISOString();
   const supplierName = invoice.supplierName.trim() || "Unknown supplier";
   const scopedSuppliers = suppliers.filter((supplier) => supplier.ownerId === ownerId);
-  const trusted = scopedSuppliers.find(
+  const trustedMatches = scopedSuppliers.filter(
     (supplier) => normalizeSupplierName(supplier.name) === normalizeSupplierName(invoice.supplierName),
   );
 
@@ -109,11 +103,23 @@ export function verifyInvoicePayment(
       status: "REVIEW_REQUIRED",
       title: "Incomplete invoice details",
       explanation: "Payment details are incomplete or malformed — manual verification required.",
-      supplierId: trusted?.id,
       supplierName,
       checkedAt,
     };
   }
+
+  if (trustedMatches.length > 1) {
+    return {
+      status: "REVIEW_REQUIRED",
+      title: "Duplicate trusted records",
+      explanation: "Multiple trusted supplier records matched — manual registry cleanup is required before payment.",
+      supplierName,
+      invoiceMaskedAccount: maskAccount(invoice.bankAccountNumber),
+      checkedAt,
+    };
+  }
+
+  const trusted = trustedMatches[0];
 
   if (!trusted) {
     return {
@@ -152,4 +158,12 @@ export function verifyInvoicePayment(
     invoiceMaskedAccount: maskAccount(invoice.bankAccountNumber),
     checkedAt,
   };
+}
+
+export async function verifyInvoicePaymentFromRepository(
+  invoice: InvoicePaymentDetails,
+  repository: TrustedSupplierRepository,
+  ownerId: string,
+): Promise<VerificationResult> {
+  return verifyInvoicePayment(invoice, await repository.listByOwner(ownerId), ownerId);
 }

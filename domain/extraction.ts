@@ -1,21 +1,11 @@
 import {
   validateInvoicePaymentDetails,
-  verifyInvoicePayment,
   type InvoicePaymentDetails,
-  type TrustedSupplier,
   type VerificationResult,
+  verifyInvoicePayment,
 } from "./verification";
-
-export interface InvoiceDocument {
-  id: string;
-  fileName: string;
-  contentType: "application/pdf" | "image/jpeg" | "image/png";
-  demoLabel?: string;
-}
-
-export interface InvoiceExtractionAdapter {
-  extract(document: InvoiceDocument): Promise<InvoicePaymentDetails>;
-}
+import type { InvoiceDocument, InvoiceExtractionAdapter, TrustedSupplierRepository } from "./ports";
+import type { TrustedSupplier } from "./verification";
 
 export class MockInvoiceExtractionAdapter implements InvoiceExtractionAdapter {
   private readonly documents: ReadonlyMap<string, InvoicePaymentDetails>;
@@ -48,7 +38,7 @@ export interface InvoiceVerificationPipelineResult {
 export async function processInvoiceDocument(
   document: InvoiceDocument,
   adapter: InvoiceExtractionAdapter,
-  suppliers: TrustedSupplier[],
+  supplierSource: TrustedSupplierRepository | TrustedSupplier[],
   ownerId: string,
 ): Promise<InvoiceVerificationPipelineResult> {
   try {
@@ -68,6 +58,9 @@ export async function processInvoiceDocument(
       };
     }
 
+    const suppliers = Array.isArray(supplierSource)
+      ? supplierSource
+      : await supplierSource.listByOwner(ownerId);
     return {
       extraction,
       extractionIssues: [],
