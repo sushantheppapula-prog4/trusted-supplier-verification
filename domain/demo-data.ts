@@ -1,3 +1,4 @@
+import type { InvoiceDocument } from "./extraction";
 import type { InvoicePaymentDetails, TrustedSupplier } from "./verification";
 
 export const DEMO_OWNER_ID = "demo-owner";
@@ -78,3 +79,14 @@ export const demoVerificationScenarios: DemoVerificationScenario[] = [
     },
   },
 ];
+
+export const demoInvoiceDocuments: InvoiceDocument[] = demoVerificationScenarios.map((scenario) => ({
+  id: scenario.id,
+  fileName: `${scenario.id}.pdf`,
+  contentType: "application/pdf",
+  demoLabel: scenario.label,
+}));
+
+export const demoExtractionFixtures = new Map(
+  demoVerificationScenarios.map((scenario) => [scenario.id, scenario.invoice]),
+);

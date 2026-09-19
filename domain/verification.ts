@@ -41,6 +41,11 @@ export interface InvoiceExtractionAdapter {
   extract(fileKey: string): Promise<InvoicePaymentDetails>;
 }
 
+export interface PaymentValidationIssue {
+  field: keyof InvoicePaymentDetails;
+  message: string;
+}
+
 export function normalizeSupplierName(value: string): string {
   return value
     .normalize("NFKD")
@@ -68,16 +73,19 @@ export function maskAccount(value: string): string {
   return normalized.length <= 4 ? "••••" : `•••• ${normalized.slice(-4)}`;
 }
 
-function hasRequiredPaymentDetails(payment: InvoicePaymentDetails): boolean {
-  return Boolean(
-    normalizeSupplierName(payment.supplierName) &&
-      normalizeBankAccount(payment.bankAccountNumber) &&
-      /^[A-Z]{4}0[A-Z0-9]{6}$/i.test(normalizeIfsc(payment.ifsc)) &&
-      payment.invoiceNumber.trim() &&
-      Number.isFinite(payment.invoiceAmount) &&
-      payment.invoiceAmount >= 0 &&
-      /^\d{4}-\d{2}-\d{2}$/.test(payment.invoiceDate),
-  );
+export function validateInvoicePaymentDetails(payment: InvoicePaymentDetails): PaymentValidationIssue[] {
+  const issues: PaymentValidationIssue[] = [];
+  const account = normalizeBankAccount(payment.bankAccountNumber);
+  const ifsc = normalizeIfsc(payment.ifsc);
+  const upi = normalizeUpi(payment.upiId);
+  if (!normalizeSupplierName(payment.supplierName)) issues.push({ field: "supplierName", message: "Supplier name is missing." });
+  if (!/^\d{6,20}$/.test(account)) issues.push({ field: "bankAccountNumber", message: "Bank account number must contain 6–20 digits." });
+  if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) issues.push({ field: "ifsc", message: "IFSC must match the expected 11-character format." });
+  if (upi && !/^[a-z0-9][a-z0-9._-]{1,}@[a-z0-9][a-z0-9.-]{1,}$/.test(upi)) issues.push({ field: "upiId", message: "UPI ID format is invalid." });
+  if (!payment.invoiceNumber.trim()) issues.push({ field: "invoiceNumber", message: "Invoice number is missing." });
+  if (!Number.isFinite(payment.invoiceAmount) || payment.invoiceAmount < 0) issues.push({ field: "invoiceAmount", message: "Invoice amount is invalid." });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(payment.invoiceDate)) issues.push({ field: "invoiceDate", message: "Invoice date must use YYYY-MM-DD." });
+  return issues;
 }
 
 function optionalIdentifierMatches(trusted?: string, invoice?: string): boolean {
@@ -96,7 +104,7 @@ export function verifyInvoicePayment(
     (supplier) => normalizeSupplierName(supplier.name) === normalizeSupplierName(invoice.supplierName),
   );
 
-  if (!hasRequiredPaymentDetails(invoice)) {
+  if (validateInvoicePaymentDetails(invoice).length > 0) {
     return {
       status: "REVIEW_REQUIRED",
       title: "Incomplete invoice details",

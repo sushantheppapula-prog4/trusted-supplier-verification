@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { demoTrustedSuppliers, DEMO_OWNER_ID, demoVerificationScenarios } from "../domain/demo-data";
+import {
+  demoExtractionFixtures,
+  demoInvoiceDocuments,
+  demoTrustedSuppliers,
+  DEMO_OWNER_ID,
+  demoVerificationScenarios,
+} from "../domain/demo-data";
+import { MockInvoiceExtractionAdapter, processInvoiceDocument } from "../domain/extraction";
 import {
   normalizeSupplierName,
+  validateInvoicePaymentDetails,
   verifyInvoicePayment,
   type InvoicePaymentDetails,
 } from "../domain/verification";
@@ -72,4 +80,52 @@ test("different bank accounts never false-match", () => {
 test("supplier registry is owner-scoped", () => {
   const result = verifyInvoicePayment(scenario("matching-details"), demoTrustedSuppliers, "another-owner");
   assert.equal(result.status, "REVIEW_REQUIRED");
+});
+
+test("mock invoice pipeline produces all three demo outcomes", async () => {
+  const adapter = new MockInvoiceExtractionAdapter(demoExtractionFixtures);
+  const results = await Promise.all(
+    demoInvoiceDocuments.map((document) => processInvoiceDocument(document, adapter, demoTrustedSuppliers, DEMO_OWNER_ID)),
+  );
+  assert.deepEqual(results.map((result) => result.verification.status), ["LOW_RISK", "HIGH_RISK", "REVIEW_REQUIRED"]);
+  assert.equal(results[0].extraction?.invoiceNumber, "DEMO-1001");
+  assert.match(results[1].verification.explanation, /BANK DETAILS CHANGED/);
+});
+
+test("missing supplier and bank details cannot produce LOW_RISK", async () => {
+  const adapter = new MockInvoiceExtractionAdapter(new Map([
+    ["missing-fields", { ...scenario("matching-details"), supplierName: "", bankAccountNumber: "" }],
+  ]));
+  const result = await processInvoiceDocument(
+    { id: "missing-fields", fileName: "DEMO-missing-fields.pdf", contentType: "application/pdf" },
+    adapter,
+    demoTrustedSuppliers,
+    DEMO_OWNER_ID,
+  );
+  assert.equal(result.verification.status, "REVIEW_REQUIRED");
+  assert.ok(result.extractionIssues.some((issue) => issue.startsWith("supplierName:")));
+  assert.ok(result.extractionIssues.some((issue) => issue.startsWith("bankAccountNumber:")));
+});
+
+test("malformed account, IFSC, and UPI values are rejected before lookup", () => {
+  const invoice = {
+    ...scenario("matching-details"),
+    bankAccountNumber: "account-xyz",
+    ifsc: "BAD",
+    upiId: "not-a-upi",
+  };
+  const issues = validateInvoicePaymentDetails(invoice);
+  assert.deepEqual(issues.map((issue) => issue.field), ["bankAccountNumber", "ifsc", "upiId"]);
+  assert.equal(verifyInvoicePayment(invoice, demoTrustedSuppliers, DEMO_OWNER_ID).status, "REVIEW_REQUIRED");
+});
+
+test("pipeline extraction failure produces REVIEW_REQUIRED", async () => {
+  const result = await processInvoiceDocument(
+    { id: "unknown", fileName: "DEMO-unknown.pdf", contentType: "application/pdf" },
+    new MockInvoiceExtractionAdapter(new Map()),
+    demoTrustedSuppliers,
+    DEMO_OWNER_ID,
+  );
+  assert.equal(result.verification.status, "REVIEW_REQUIRED");
+  assert.equal(result.extraction, null);
 });
