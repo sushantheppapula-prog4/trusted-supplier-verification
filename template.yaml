@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Secure presigned invoice uploads for Trusted Supplier Verification.
+
+Parameters:
+  CognitoUserPoolId:
+    Type: String
+    Default: ap-south-1_S3dpK1Sf7
+  CognitoUserPoolClientId:
+    Type: String
+    Default: qssp7vfvpaqprpmi1r01a7egj
+  AllowedOrigin:
+    Type: String
+    Default: http://localhost:3000
+
+Resources:
+  InvoiceBucket:
+    Type: AWS::S3::Bucket
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [PUT]
+            AllowedOrigins:
+              - Ref: AllowedOrigin
+            ExposedHeaders: [ETag]
+            MaxAge: 300
+      VersioningConfiguration:
+        Status: Enabled
+
+  UploadApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      CorsConfiguration:
+        AllowOrigins:
+          - Ref: AllowedOrigin
+        AllowHeaders: [authorization, content-type]
+        AllowMethods: [POST, OPTIONS]
+        MaxAge: 300
+      Auth:
+        Authorizers:
+          CognitoJwt:
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPoolId}
+              audience:
+                - Ref: CognitoUserPoolClientId
+            Identity:
+              Headers:
+                - Authorization
+        DefaultAuthorizer: CognitoJwt
+
+  UploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: get-upload-url.handler
+      Runtime: nodejs20.x
+      MemorySize: 256
+      Timeout: 10
+      Environment:
+        Variables:
+          INVOICE_BUCKET: !Ref InvoiceBucket
+          ALLOWED_ORIGIN: !Ref AllowedOrigin
+      Policies:
+        - Statement:
+            - Sid: AllowPutOnlyToInvoicePrefix
+              Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub ${InvoiceBucket.Arn}/invoices/*
+      Events:
+        GetUploadUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref UploadApi
+            Path: /upload-url
+            Method: POST
+            Auth:
+              Authorizer: CognitoJwt
+
+Outputs:
+  InvoiceBucketName:
+    Description: Private S3 bucket containing invoice uploads
+    Value: !Ref InvoiceBucket
+  UploadApiEndpoint:
+    Description: Authenticated endpoint used to request a presigned PUT URL
+    Value: !Sub https://${UploadApi}.execute-api.${AWS::Region}.amazonaws.com/upload-url
+  UploadFunctionName:
+    Description: Lambda function generating presigned upload URLs
+    Value: !Ref UploadFunction
