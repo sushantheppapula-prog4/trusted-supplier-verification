@@ -35,6 +35,7 @@ test("changed bank account is HIGH_RISK", () => {
   assert.equal(result.status, "HIGH_RISK");
   assert.match(result.explanation, /BANK DETAILS CHANGED/);
   assert.equal(result.invoiceMaskedAccount, "•••• 6655");
+  assert.deepEqual(result.changedFields, ["bankAccountNumber"]);
 });
 
 test("changed IFSC is HIGH_RISK", () => {

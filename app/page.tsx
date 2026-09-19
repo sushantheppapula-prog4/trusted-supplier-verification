@@ -5,18 +5,33 @@ import "aws-amplify/auth/enable-oauth-listener";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { fetchAuthSession, getCurrentUser, signInWithRedirect, signOut } from "aws-amplify/auth";
 import { Hub } from "aws-amplify/utils";
-import { DEMO_OWNER_ID, demoTrustedSuppliers, demoVerificationScenarios } from "../domain/demo-data";
-import { verifyInvoicePayment } from "../domain/verification";
-
-type UploadState = "idle" | "requesting" | "uploading" | "success" | "error";
+import {
+  DEMO_OWNER_ID,
+  demoExtractionFixtures,
+  demoInvoiceDocuments,
+  demoTrustedSuppliers,
+  demoVerificationScenarios,
+  InMemoryTrustedSupplierRepository,
+} from "../domain/demo-data";
+import { MockInvoiceExtractionAdapter, processInvoiceDocument, type InvoiceVerificationPipelineResult } from "../domain/extraction";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ACCEPTED_TYPES = ["application/pdf", "image/jpeg", "image/png"];
 const API_URL = process.env.NEXT_PUBLIC_UPLOAD_API_URL;
-const demoResults = demoVerificationScenarios.map((scenario) => ({
-  ...scenario,
-  result: verifyInvoicePayment(scenario.invoice, demoTrustedSuppliers, DEMO_OWNER_ID),
-}));
+const demoAdapter = new MockInvoiceExtractionAdapter(demoExtractionFixtures);
+const demoRepository = new InMemoryTrustedSupplierRepository(demoTrustedSuppliers);
+
+type UploadState = "idle" | "requesting" | "uploading" | "success" | "error";
+type DemoStage = "idle" | "uploading" | "extracting" | "checking" | "comparing" | "complete" | "error";
+
+const stages: Array<{ id: Exclude<DemoStage, "idle" | "complete" | "error">; label: string }> = [
+  { id: "uploading", label: "Uploading invoice" },
+  { id: "extracting", label: "Extracting invoice details" },
+  { id: "checking", label: "Checking trusted supplier" },
+  { id: "comparing", label: "Comparing payment details" },
+];
+
+const wait = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
 export default function Home() {
   const [user, setUser] = useState<string | null>(null);
@@ -25,6 +40,9 @@ export default function Home() {
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState("");
+  const [selectedScenarioId, setSelectedScenarioId] = useState("matching-details");
+  const [demoStage, setDemoStage] = useState<DemoStage>("idle");
+  const [demoResult, setDemoResult] = useState<InvoiceVerificationPipelineResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadUser = async () => {
@@ -81,15 +99,10 @@ export default function Home() {
       const session = await fetchAuthSession();
       const token = session.tokens?.accessToken?.toString();
       if (!token) throw new Error("Your session has expired. Please sign in again.");
-
       const urlResponse = await fetch(API_URL, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName: selectedFile.name,
-          contentType: selectedFile.type,
-          fileSize: selectedFile.size,
-        }),
+        body: JSON.stringify({ fileName: selectedFile.name, contentType: selectedFile.type, fileSize: selectedFile.size }),
       });
       const payload = await urlResponse.json().catch(() => ({}));
       if (!urlResponse.ok || !payload.uploadUrl) throw new Error(payload.error ?? "Could not prepare secure upload.");
@@ -108,11 +121,28 @@ export default function Home() {
       });
       setUploadState("success");
       setProgress(100);
-      setMessage("Invoice uploaded securely. Verification is ready for the next milestone.");
+      setMessage("Invoice uploaded securely. Choose a DEMO scenario below to walk through verification.");
     } catch (error) {
       setUploadState("error");
       setMessage(error instanceof Error ? error.message : "Upload failed. Please try again.");
     }
+  };
+
+  const runDemo = async () => {
+    const document = demoInvoiceDocuments.find((item) => item.id === selectedScenarioId);
+    if (!document) return;
+    setDemoResult(null);
+    setDemoStage("uploading");
+    await wait(500);
+    setDemoStage("extracting");
+    await wait(650);
+    setDemoStage("checking");
+    await wait(650);
+    setDemoStage("comparing");
+    await wait(650);
+    const result = await processInvoiceDocument(document, demoAdapter, demoRepository, DEMO_OWNER_ID);
+    setDemoResult(result);
+    setDemoStage("complete");
   };
 
   const handleSignOut = async () => {
@@ -120,6 +150,8 @@ export default function Home() {
     setUser(null);
     setSelectedFile(null);
     setUploadState("idle");
+    setDemoStage("idle");
+    setDemoResult(null);
   };
 
   if (loading) return <main className="min-h-screen bg-[#06111f] p-8 text-slate-400">Checking authentication...</main>;
@@ -132,11 +164,30 @@ export default function Home() {
           {user && <button onClick={handleSignOut} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:border-cyan-300/50 hover:text-white">Sign out</button>}
         </header>
 
-        {!user ? <section className="mx-auto flex w-full max-w-xl flex-1 items-center"><div className="w-full rounded-3xl border border-white/10 bg-white/[0.04] p-8 shadow-2xl shadow-cyan-950/30"><p className="text-sm font-medium text-cyan-300">PAYMENT SECURITY FOR SMALL BUSINESS</p><h1 className="mt-3 text-4xl font-semibold tracking-tight">Stop invoice fraud before it reaches your bank.</h1><p className="mt-4 leading-7 text-slate-400">Sign in to securely upload an invoice. Your file stays private while we prepare it for supplier verification.</p><button onClick={() => signInWithRedirect()} className="mt-8 w-full rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300">Sign in with Cognito</button></div></section> : <section className="flex-1 py-12"><div className="mb-10 flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><p className="text-sm font-medium text-cyan-300">CONTROL CENTER / INVOICE INTAKE</p><h1 className="mt-2 text-4xl font-semibold tracking-tight">Verify before you pay.</h1><p className="mt-3 max-w-2xl text-slate-400">Upload an invoice to begin a secure supplier payment-details review.</p></div><div className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-4 py-2 text-sm text-emerald-300">● Protected session</div></div><div className="grid gap-6 lg:grid-cols-[1.35fr_0.65fr]"><div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-2xl shadow-cyan-950/20 md:p-8"><div className="flex items-center justify-between"><div><h2 className="text-xl font-semibold">New invoice</h2><p className="mt-1 text-sm text-slate-500">Private upload · up to 10 MB</p></div><span className="rounded-lg bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-300">STEP 01 / 03</span></div><button onClick={() => fileInputRef.current?.click()} className="mt-8 flex min-h-48 w-full flex-col items-center justify-center rounded-2xl border border-dashed border-cyan-300/30 bg-slate-950/40 px-6 text-center transition hover:border-cyan-300 hover:bg-cyan-400/[0.04]"><div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-400/10 text-2xl text-cyan-300">↑</div><span className="font-medium">{selectedFile ? selectedFile.name : "Choose invoice file"}</span><span className="mt-2 text-sm text-slate-500">PDF, JPG, JPEG, or PNG</span></button><input ref={fileInputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" onChange={chooseFile} className="hidden" />{selectedFile && <div className="mt-5 flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/50 p-4"><div><p className="text-sm font-medium">{selectedFile.name}</p><p className="mt-1 text-xs text-slate-500">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB · {selectedFile.type || "unknown type"}</p></div><button onClick={() => { setSelectedFile(null); setUploadState("idle"); setProgress(0); if (fileInputRef.current) fileInputRef.current.value = ""; }} className="text-xs text-slate-500 hover:text-white">Remove</button></div>}<button disabled={!selectedFile || uploadState === "requesting" || uploadState === "uploading"} onClick={uploadFile} className="mt-5 w-full rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-40">{uploadState === "requesting" ? "Preparing secure upload..." : uploadState === "uploading" ? `Uploading ${progress}%` : "Upload securely"}</button>{(uploadState === "requesting" || uploadState === "uploading") && <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-cyan-400 transition-all" style={{ width: `${progress}%` }} /></div>}{message && <p className={`mt-4 rounded-xl border p-3 text-sm ${uploadState === "success" ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-rose-400/20 bg-rose-400/10 text-rose-300"}`}>{message}</p>}</div><aside className="space-y-6"><div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6"><p className="text-sm font-medium text-slate-400">SECURITY STATUS</p><div className="mt-5 space-y-4 text-sm"><div className="flex items-center justify-between"><span className="text-slate-400">Authentication</span><span className="text-emerald-300">Verified</span></div><div className="flex items-center justify-between"><span className="text-slate-400">Storage</span><span className="text-emerald-300">Private S3</span></div><div className="flex items-center justify-between"><span className="text-slate-400">Encryption</span><span className="text-emerald-300">AES-256</span></div></div></div><div className="rounded-3xl border border-cyan-300/15 bg-cyan-400/[0.05] p-6"><p className="text-sm font-medium text-cyan-300">WHAT HAPPENS NEXT</p><p className="mt-3 text-sm leading-6 text-slate-400">Your upload is stored under your private user identity. Supplier matching and payment-detail verification will be added in the next milestone.</p></div></aside></div></section>}
-        {user && <section className="mb-10 rounded-3xl border border-white/10 bg-white/[0.03] p-6 md:p-8"><div className="flex flex-col justify-between gap-3 md:flex-row md:items-end"><div><p className="text-sm font-medium text-cyan-300">DEMO MODE / VERIFICATION PREVIEW</p><h2 className="mt-2 text-2xl font-semibold">Trusted supplier risk signals</h2><p className="mt-2 text-sm text-slate-500">Sample data only. Future Bedrock extraction and DynamoDB records will plug into these same interfaces.</p></div><span className="rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-medium text-amber-200">NO LIVE PAYMENT DECISION</span></div><div className="mt-6 grid gap-4 lg:grid-cols-3">{demoResults.map(({ id, label, description, result }) => { const tone = result.status === "LOW_RISK" ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : result.status === "HIGH_RISK" ? "border-rose-400/20 bg-rose-400/10 text-rose-300" : "border-amber-400/20 bg-amber-400/10 text-amber-300"; return <article key={id} className="rounded-2xl border border-white/10 bg-slate-950/40 p-5"><div className="flex items-center justify-between gap-3"><span className="text-xs text-slate-500">{label}</span><span className={`rounded-full border px-2 py-1 text-[10px] font-semibold tracking-wide ${tone}`}>{result.status.replace("_", " ")}</span></div><h3 className="mt-5 text-lg font-semibold">{result.title}</h3><p className="mt-2 text-sm leading-6 text-slate-400">{result.explanation}</p><p className="mt-2 text-xs text-slate-600">{description}</p><p className="mt-4 text-xs text-slate-500">Supplier: <span className="text-slate-300">{result.supplierName}</span></p>{result.previousMaskedAccount && result.invoiceMaskedAccount && <div className="mt-3 grid grid-cols-2 gap-2 text-xs"><div className="rounded-lg bg-white/[0.04] p-2"><span className="block text-slate-600">Trusted account</span><span className="text-slate-300">{result.previousMaskedAccount}</span></div><div className="rounded-lg bg-white/[0.04] p-2"><span className="block text-slate-600">Invoice account</span><span className="text-slate-300">{result.invoiceMaskedAccount}</span></div></div>}</article>; })}</div></section>}
-        {user && <section className="mb-10 rounded-3xl border border-cyan-300/10 bg-cyan-400/[0.03] p-6"><p className="text-xs font-medium tracking-wide text-cyan-300">DEMO / LOCAL PROCESSING PIPELINE</p><div className="mt-4 grid gap-3 text-sm text-slate-300 md:grid-cols-4"><div className="rounded-xl border border-white/10 bg-slate-950/40 p-4"><span className="text-cyan-300">01</span><p className="mt-2 font-medium">Upload Invoice</p></div><div className="rounded-xl border border-white/10 bg-slate-950/40 p-4"><span className="text-cyan-300">02</span><p className="mt-2 font-medium">Extracting invoice details</p></div><div className="rounded-xl border border-white/10 bg-slate-950/40 p-4"><span className="text-cyan-300">03</span><p className="mt-2 font-medium">Checking trusted supplier</p></div><div className="rounded-xl border border-white/10 bg-slate-950/40 p-4"><span className="text-cyan-300">04</span><p className="mt-2 font-medium">Verification result</p></div></div><p className="mt-4 text-xs text-slate-600">The extraction stage is currently powered by DEMO fixtures. Bedrock and DynamoDB remain future AWS integrations.</p></section>}
-        <footer className="border-t border-white/10 pt-5 text-xs text-slate-600">Trusted Supplier Verification · Secure invoice intake</footer>
+        {!user ? <section className="mx-auto flex w-full max-w-xl flex-1 items-center"><div className="w-full rounded-3xl border border-white/10 bg-white/[0.04] p-8 shadow-2xl shadow-cyan-950/30"><p className="text-sm font-medium text-cyan-300">PAYMENT SECURITY FOR SMALL BUSINESS</p><h1 className="mt-3 text-4xl font-semibold tracking-tight">Stop invoice fraud before it reaches your bank.</h1><p className="mt-4 leading-7 text-slate-400">Sign in to securely upload an invoice or explore the transparent local demo workflow.</p><button onClick={() => signInWithRedirect()} className="mt-8 w-full rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300">Sign in with Cognito</button></div></section> : <section className="flex-1 py-12">
+          <div className="mb-10 flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><div className="flex items-center gap-3"><p className="text-sm font-medium text-cyan-300">CONTROL CENTER / INVOICE INTAKE</p><span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-[10px] font-semibold tracking-wide text-amber-200">DEMO MODE</span></div><h1 className="mt-2 text-4xl font-semibold tracking-tight">Verify before you pay.</h1><p className="mt-3 max-w-2xl text-slate-400">Compare invoice payment details against a trusted supplier record. Results indicate risk and verification status; they do not prove fraud.</p></div><div className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-4 py-2 text-sm text-emerald-300">● Protected session</div></div>
+
+          <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="space-y-6">
+              <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-2xl shadow-cyan-950/20 md:p-8"><div className="flex items-center justify-between"><div><h2 className="text-xl font-semibold">Verify Invoice</h2><p className="mt-1 text-sm text-slate-500">Choose a transparent DEMO invoice to run locally.</p></div><span className="rounded-lg bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-300">DEMO / LOCAL</span></div><div className="mt-6 space-y-3">{demoVerificationScenarios.map((scenario) => { const selected = selectedScenarioId === scenario.id; return <button key={scenario.id} onClick={() => { setSelectedScenarioId(scenario.id); setDemoResult(null); setDemoStage("idle"); }} className={`w-full rounded-2xl border p-4 text-left transition ${selected ? "border-cyan-300/60 bg-cyan-400/[0.08]" : "border-white/10 bg-slate-950/30 hover:border-cyan-300/30"}`}><div className="flex items-center justify-between gap-3"><span className="font-medium">{scenario.label}</span><span className="text-xs text-slate-500">{scenario.invoice.invoiceNumber}</span></div><p className="mt-2 text-sm text-slate-400">{scenario.description}</p></button>; })}</div><button onClick={runDemo} disabled={demoStage !== "idle" && demoStage !== "complete" && demoStage !== "error"} className="mt-6 w-full rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-50">{demoStage !== "idle" && demoStage !== "complete" && demoStage !== "error" ? "Verifying invoice..." : "Verify Invoice"}</button></div>
+
+              <div className="rounded-3xl border border-cyan-300/10 bg-cyan-400/[0.03] p-6"><p className="text-xs font-medium tracking-wide text-cyan-300">PROCESSING PIPELINE</p><div className="mt-4 grid gap-3 sm:grid-cols-2">{stages.map((stage, index) => { const activeIndex = stages.findIndex((item) => item.id === demoStage); const active = activeIndex >= index || demoStage === "complete"; return <div key={stage.id} className={`rounded-xl border p-4 ${active ? "border-cyan-300/40 bg-cyan-400/[0.08]" : "border-white/10 bg-slate-950/30"}`}><span className={`text-xs ${active ? "text-cyan-300" : "text-slate-600"}`}>0{index + 1}</span><p className={`mt-2 text-sm font-medium ${active ? "text-slate-200" : "text-slate-500"}`}>{stage.label}</p></div>; })}</div><p className="mt-4 text-xs text-slate-600">Mock extraction and local supplier storage power this demo. Production adapters for S3, Bedrock, and DynamoDB remain separate integration boundaries.</p></div>
+            </div>
+
+            <aside className="space-y-6"><div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6"><p className="text-sm font-medium text-slate-400">VERIFICATION RESULT</p>{!demoResult ? <div className="mt-8"><div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-cyan-400/10 text-2xl text-cyan-300">✓</div><h2 className="mt-5 text-2xl font-semibold">Ready for review</h2><p className="mt-3 text-sm leading-6 text-slate-500">Select one of the three DEMO invoices and run the real local extraction-to-verification pipeline.</p></div> : <ResultCard result={demoResult} />}</div><div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6"><p className="text-sm font-medium text-slate-400">SECURITY STATUS</p><div className="mt-5 space-y-4 text-sm"><div className="flex items-center justify-between"><span className="text-slate-400">Authentication</span><span className="text-emerald-300">Verified</span></div><div className="flex items-center justify-between"><span className="text-slate-400">Payment display</span><span className="text-emerald-300">Masked</span></div><div className="flex items-center justify-between"><span className="text-slate-400">Decision mode</span><span className="text-amber-200">Demo only</span></div></div></div></aside>
+          </div>
+
+          <div className="mt-8 rounded-3xl border border-white/10 bg-white/[0.03] p-6"><div className="flex flex-col justify-between gap-4 md:flex-row md:items-center"><div><p className="text-sm font-medium text-cyan-300">OPTIONAL / SECURE UPLOAD</p><p className="mt-2 text-sm text-slate-400">The existing authenticated presigned-S3 upload remains available for deployed environments.</p></div><button onClick={() => fileInputRef.current?.click()} className="rounded-xl border border-cyan-300/30 px-5 py-3 text-sm font-semibold text-cyan-200 transition hover:border-cyan-300 hover:bg-cyan-400/[0.06]">Choose invoice file</button></div><input ref={fileInputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" onChange={chooseFile} className="hidden" />{selectedFile && <div className="mt-5 flex flex-col gap-3 rounded-xl border border-white/10 bg-slate-950/50 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-medium">{selectedFile.name}</p><p className="mt-1 text-xs text-slate-500">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB · {selectedFile.type || "unknown type"}</p></div><button onClick={uploadFile} disabled={uploadState === "requesting" || uploadState === "uploading"} className="rounded-lg bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">{uploadState === "requesting" ? "Preparing..." : uploadState === "uploading" ? `Uploading ${progress}%` : "Upload securely"}</button></div>}{message && <p className={`mt-4 rounded-xl border p-3 text-sm ${uploadState === "success" ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-rose-400/20 bg-rose-400/10 text-rose-300"}`}>{message}</p>}</div>
+        </section>}
+        <footer className="border-t border-white/10 pt-5 text-xs text-slate-600">Trusted Supplier Verification · Secure invoice intake · DEMO data only</footer>
       </div>
     </main>
   );
+}
+
+function ResultCard({ result }: { result: InvoiceVerificationPipelineResult }) {
+  const verification = result.verification;
+  const tone = verification.status === "LOW_RISK" ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : verification.status === "HIGH_RISK" ? "border-rose-400/30 bg-rose-400/10 text-rose-300" : "border-amber-400/30 bg-amber-400/10 text-amber-200";
+  const changedFieldLabels = verification.changedFields?.map((field) => field === "bankAccountNumber" ? "Bank account" : field === "ifsc" ? "IFSC" : "UPI ID");
+  return <div className="mt-5"><div className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold tracking-wide ${tone}`}>{verification.status.replace("_", " ")}</div><h2 className="mt-5 text-2xl font-semibold">{verification.title}</h2><p className="mt-3 text-sm leading-6 text-slate-400">{verification.explanation}</p><div className="mt-5 space-y-3 text-sm"><div className="flex items-center justify-between gap-4"><span className="text-slate-500">Supplier</span><span className="text-right text-slate-200">{verification.supplierName}</span></div>{verification.previousMaskedAccount && verification.invoiceMaskedAccount && <><div className="flex items-center justify-between gap-4"><span className="text-slate-500">Trusted account</span><span className="text-slate-200">{verification.previousMaskedAccount}</span></div><div className="flex items-center justify-between gap-4"><span className="text-slate-500">Invoice account</span><span className="text-slate-200">{verification.invoiceMaskedAccount}</span></div></>}{changedFieldLabels && changedFieldLabels.length > 0 && <div className="rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3"><span className="text-xs text-rose-300">Changed fields</span><p className="mt-1 text-sm text-slate-200">{changedFieldLabels.join(" · ")}</p></div>}{result.extractionIssues.length > 0 && <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.06] p-3"><span className="text-xs text-amber-200">Review reason</span><p className="mt-1 text-sm text-slate-300">{result.extractionIssues.join(" ")}</p></div>}</div></div>;
 }

@@ -30,6 +30,7 @@ export interface VerificationResult {
   supplierName: string;
   previousMaskedAccount?: string;
   invoiceMaskedAccount?: string;
+  changedFields?: Array<"bankAccountNumber" | "ifsc" | "upiId">;
   checkedAt: string;
 }
 
@@ -136,6 +137,11 @@ export function verifyInvoicePayment(
   const ifscMatches = normalizeIfsc(trusted.ifsc) === normalizeIfsc(invoice.ifsc);
   const upiMatches = optionalIdentifierMatches(trusted.upiId, invoice.upiId);
   if (!trusted.verified || !accountMatches || !ifscMatches || !upiMatches) {
+    const changedFields = [
+      ...(accountMatches ? [] : ["bankAccountNumber" as const]),
+      ...(ifscMatches ? [] : ["ifsc" as const]),
+      ...(upiMatches ? [] : ["upiId" as const]),
+    ];
     return {
       status: "HIGH_RISK",
       title: "Bank details changed",
@@ -144,6 +150,7 @@ export function verifyInvoicePayment(
       supplierName: trusted.name,
       previousMaskedAccount: maskAccount(trusted.bankAccountNumber),
       invoiceMaskedAccount: maskAccount(invoice.bankAccountNumber),
+      changedFields,
       checkedAt,
     };
   }
