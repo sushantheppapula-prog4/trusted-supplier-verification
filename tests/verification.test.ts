@@ -104,7 +104,7 @@ test("mock invoice pipeline produces all three demo outcomes", async () => {
     demoInvoiceDocuments.map((document) => processInvoiceDocument(document, adapter, demoTrustedSuppliers, DEMO_OWNER_ID)),
   );
   assert.deepEqual(results.map((result) => result.verification.status), ["LOW_RISK", "HIGH_RISK", "REVIEW_REQUIRED"]);
-  assert.equal(results[0].extraction?.invoiceNumber, "DEMO-1001");
+  assert.equal(results[0].extraction?.invoiceNumber, "INV-1001");
   assert.match(results[1].verification.explanation, /BANK DETAILS CHANGED/);
 });
 
