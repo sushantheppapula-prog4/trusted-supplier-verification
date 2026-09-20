@@ -1,10 +1,7 @@
 "use client";
 
-import "aws-amplify/auth/enable-oauth-listener";
-
-import { ChangeEvent, useEffect, useRef, useState } from "react";
-import { fetchAuthSession, getCurrentUser, signInWithRedirect, signOut } from "aws-amplify/auth";
-import { Hub } from "aws-amplify/utils";
+import { ChangeEvent, useRef, useState } from "react";
+import { fetchAuthSession } from "aws-amplify/auth";
 import {
   DEMO_OWNER_ID,
   demoExtractionFixtures,
@@ -34,8 +31,6 @@ const stages: Array<{ id: Exclude<DemoStage, "idle" | "complete" | "error">; lab
 const wait = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
 export default function Home() {
-  const [user, setUser] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [progress, setProgress] = useState(0);
@@ -44,28 +39,6 @@ export default function Home() {
   const [demoStage, setDemoStage] = useState<DemoStage>("idle");
   const [demoResult, setDemoResult] = useState<InvoiceVerificationPipelineResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const loadUser = async () => {
-    try {
-      const currentUser = await getCurrentUser();
-      setUser(currentUser.username);
-    } catch {
-      setUser(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    // Authentication state is an external system synchronized into this client component.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadUser();
-    const unsubscribe = Hub.listen("auth", ({ payload }) => {
-      if (payload.event === "signInWithRedirect") loadUser();
-      if (payload.event === "signInWithRedirect_failure") setMessage("Sign-in failed. Please try again.");
-    });
-    return unsubscribe;
-  }, []);
 
   const chooseFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
@@ -98,7 +71,7 @@ export default function Home() {
       setProgress(0);
       const session = await fetchAuthSession();
       const token = session.tokens?.accessToken?.toString();
-      if (!token) throw new Error("Your session has expired. Please sign in again.");
+      if (!token) throw new Error("Live S3 upload is unavailable without a production session.");
       const urlResponse = await fetch(API_URL, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -145,27 +118,15 @@ export default function Home() {
     setDemoStage("complete");
   };
 
-  const handleSignOut = async () => {
-    await signOut();
-    setUser(null);
-    setSelectedFile(null);
-    setUploadState("idle");
-    setDemoStage("idle");
-    setDemoResult(null);
-  };
-
-  if (loading) return <main className="min-h-screen bg-[#06111f] p-8 text-slate-400">Checking authentication...</main>;
-
   return (
     <main className="min-h-screen bg-[#06111f] text-white">
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-6 py-8 lg:px-10">
         <header className="flex items-center justify-between border-b border-white/10 pb-6">
           <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-400 font-black text-slate-950">TS</div><div><p className="text-sm font-semibold tracking-wide text-cyan-300">TRUSTED SUPPLIER</p><p className="text-xs text-slate-500">Verification workspace</p></div></div>
-          {user && <button onClick={handleSignOut} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:border-cyan-300/50 hover:text-white">Sign out</button>}
         </header>
 
-        {!user ? <section className="mx-auto flex w-full max-w-xl flex-1 items-center"><div className="w-full rounded-3xl border border-white/10 bg-white/[0.04] p-8 shadow-2xl shadow-cyan-950/30"><p className="text-sm font-medium text-cyan-300">PAYMENT SECURITY FOR SMALL BUSINESS</p><h1 className="mt-3 text-4xl font-semibold tracking-tight">Stop invoice fraud before it reaches your bank.</h1><p className="mt-4 leading-7 text-slate-400">Sign in to securely upload an invoice or explore the transparent local demo workflow.</p><button onClick={() => signInWithRedirect()} className="mt-8 w-full rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300">Sign in with Cognito</button></div></section> : <section className="flex-1 py-12">
-          <div className="mb-10 flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><div className="flex items-center gap-3"><p className="text-sm font-medium text-cyan-300">CONTROL CENTER / INVOICE INTAKE</p><span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-[10px] font-semibold tracking-wide text-amber-200">DEMO MODE</span></div><h1 className="mt-2 text-4xl font-semibold tracking-tight">Verify before you pay.</h1><p className="mt-3 max-w-2xl text-slate-400">Compare invoice payment details against a trusted supplier record. Results indicate risk and verification status; they do not prove fraud.</p></div><div className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-4 py-2 text-sm text-emerald-300">● Protected session</div></div>
+        <section className="flex-1 py-12">
+          <div className="mb-10 flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><div className="flex items-center gap-3"><p className="text-sm font-medium text-cyan-300">CONTROL CENTER / INVOICE INTAKE</p><span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-[10px] font-semibold tracking-wide text-amber-200">DEMO MODE</span></div><h1 className="mt-2 text-4xl font-semibold tracking-tight">Verify before you pay.</h1><p className="mt-3 max-w-2xl text-slate-400">Compare invoice payment details against a trusted supplier record. Results indicate risk and verification status; they do not prove fraud.</p></div><div className="rounded-full border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-sm text-amber-200">● Synthetic demo data</div></div>
 
           <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
             <div className="space-y-6">
@@ -174,11 +135,11 @@ export default function Home() {
               <div className="rounded-3xl border border-cyan-300/10 bg-cyan-400/[0.03] p-6"><p className="text-xs font-medium tracking-wide text-cyan-300">PROCESSING PIPELINE</p><div className="mt-4 grid gap-3 sm:grid-cols-2">{stages.map((stage, index) => { const activeIndex = stages.findIndex((item) => item.id === demoStage); const active = activeIndex >= index || demoStage === "complete"; return <div key={stage.id} className={`rounded-xl border p-4 ${active ? "border-cyan-300/40 bg-cyan-400/[0.08]" : "border-white/10 bg-slate-950/30"}`}><span className={`text-xs ${active ? "text-cyan-300" : "text-slate-600"}`}>0{index + 1}</span><p className={`mt-2 text-sm font-medium ${active ? "text-slate-200" : "text-slate-500"}`}>{stage.label}</p></div>; })}</div><p className="mt-4 text-xs text-slate-600">Mock extraction and local supplier storage power this demo. Production adapters for S3, Bedrock, and DynamoDB remain separate integration boundaries.</p></div>
             </div>
 
-            <aside className="space-y-6"><div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6"><p className="text-sm font-medium text-slate-400">VERIFICATION RESULT</p>{!demoResult ? <div className="mt-8"><div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-cyan-400/10 text-2xl text-cyan-300">✓</div><h2 className="mt-5 text-2xl font-semibold">Ready for review</h2><p className="mt-3 text-sm leading-6 text-slate-500">Select one of the three DEMO invoices and run the real local extraction-to-verification pipeline.</p></div> : <ResultCard result={demoResult} />}</div><div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6"><p className="text-sm font-medium text-slate-400">SECURITY STATUS</p><div className="mt-5 space-y-4 text-sm"><div className="flex items-center justify-between"><span className="text-slate-400">Authentication</span><span className="text-emerald-300">Verified</span></div><div className="flex items-center justify-between"><span className="text-slate-400">Payment display</span><span className="text-emerald-300">Masked</span></div><div className="flex items-center justify-between"><span className="text-slate-400">Decision mode</span><span className="text-amber-200">Demo only</span></div></div></div></aside>
+            <aside className="space-y-6"><div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6"><p className="text-sm font-medium text-slate-400">VERIFICATION RESULT</p>{!demoResult ? <div className="mt-8"><div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-cyan-400/10 text-2xl text-cyan-300">✓</div><h2 className="mt-5 text-2xl font-semibold">Ready for review</h2><p className="mt-3 text-sm leading-6 text-slate-500">Select one of the three DEMO invoices and run the real local extraction-to-verification pipeline.</p></div> : <ResultCard result={demoResult} />}</div><div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6"><p className="text-sm font-medium text-slate-400">SECURITY STATUS</p><div className="mt-5 space-y-4 text-sm"><div className="flex items-center justify-between"><span className="text-slate-400">Access</span><span className="text-emerald-300">Open demo</span></div><div className="flex items-center justify-between"><span className="text-slate-400">Payment display</span><span className="text-emerald-300">Masked</span></div><div className="flex items-center justify-between"><span className="text-slate-400">Decision mode</span><span className="text-amber-200">Demo only</span></div></div></div></aside>
           </div>
 
           <div className="mt-8 rounded-3xl border border-white/10 bg-white/[0.03] p-6"><div className="flex flex-col justify-between gap-4 md:flex-row md:items-center"><div><p className="text-sm font-medium text-cyan-300">OPTIONAL / SECURE UPLOAD</p><p className="mt-2 text-sm text-slate-400">The existing authenticated presigned-S3 upload remains available for deployed environments.</p></div><button onClick={() => fileInputRef.current?.click()} className="rounded-xl border border-cyan-300/30 px-5 py-3 text-sm font-semibold text-cyan-200 transition hover:border-cyan-300 hover:bg-cyan-400/[0.06]">Choose invoice file</button></div><input ref={fileInputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" onChange={chooseFile} className="hidden" />{selectedFile && <div className="mt-5 flex flex-col gap-3 rounded-xl border border-white/10 bg-slate-950/50 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-medium">{selectedFile.name}</p><p className="mt-1 text-xs text-slate-500">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB · {selectedFile.type || "unknown type"}</p></div><button onClick={uploadFile} disabled={uploadState === "requesting" || uploadState === "uploading"} className="rounded-lg bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">{uploadState === "requesting" ? "Preparing..." : uploadState === "uploading" ? `Uploading ${progress}%` : "Upload securely"}</button></div>}{message && <p className={`mt-4 rounded-xl border p-3 text-sm ${uploadState === "success" ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-rose-400/20 bg-rose-400/10 text-rose-300"}`}>{message}</p>}</div>
-        </section>}
+        </section>
         <footer className="border-t border-white/10 pt-5 text-xs text-slate-600">Trusted Supplier Verification · Secure invoice intake · DEMO data only</footer>
       </div>
     </main>
